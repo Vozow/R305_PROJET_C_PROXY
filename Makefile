@@ -6,3 +6,8 @@ proxy.o: proxy.c simpleSocketAPI.h
 	${CC} -c $^ 
 simpleSocketAPI.o: simpleSocketAPI.c
 	${CC} -c $^ 
+
+clean: proxy
+	rm -f proxy
+	rm -f *.o
+	rm -f *.gch
