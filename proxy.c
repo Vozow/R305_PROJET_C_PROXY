@@ -95,12 +95,76 @@ int main(){
      }
     // Echange de données avec le client connecté
 
-    /*****
-     * Testez de mettre 220 devant BLABLABLA ...
-     * **/
-    strcpy(buffer, "BLABLABLA\n");
+    //Connection au serveur FTP
+    strcpy(buffer, "220 - Bienvenue sur le Proxy, veuillez vous authentifier\r\n");
+    write(descSockCOM, buffer, strlen(buffer));
+    printf("Connection au proxy (220)\n");
+    memset(buffer, 0, MAXBUFFERLEN);
+    
+
+    //Lecture de la reponse
+    ecode = read(descSockCOM, buffer, MAXBUFFERLEN);
+    //Cas de AUTH TLS
+    if (ecode == -1) {
+        perror("Erreur lecture");
+    } 
+    if (ecode == 0) {
+        printf("Connexion fermé.\n");
+    }
+    if (ecode > 0) {
+        printf("- Lecture réponse du client :\n");
+        printf("%s", buffer);
+        if (strncmp(buffer, "AUTH", 4) == 0) {
+            strcpy(buffer, "502 Command not implemented.\r\n");
+            write(descSockCOM, buffer, strlen(buffer));
+            ecode = read(descSockCOM, buffer, MAXBUFFERLEN);
+        }
+    }   
+    //Cas de AUTH SSL
+    if (ecode == -1) {
+        perror("Erreur lecture");
+    } 
+    if (ecode == 0) {
+        printf("Connexion fermé.\n");
+    }
+    if (ecode > 0) {
+        printf("- Lecture réponse du client :\n");
+        printf("%s", buffer);
+        if (strncmp(buffer, "AUTH", 4) == 0) {
+            strcpy(buffer, "502 Command not implemented.\r\n");
+            write(descSockCOM, buffer, strlen(buffer));
+            ecode = read(descSockCOM, buffer, MAXBUFFERLEN);
+        }
+    }   
+    //Cas de USER
+    if (ecode == -1) {
+        perror("Erreur lecture");
+    } 
+    if (ecode == 0) {
+        printf("Connexion fermé.\n");
+    }
+    if (ecode > 0) {
+        printf("- Lecture réponse du client :\n");
+        printf("%s", buffer);
+    }
+
+    //Connection au serveur
+    /*
+    memset(buffer, 0, MAXBUFFERLEN);
+    strcpy(buffer, "220 - Bienvenue sur le Proxy, veuillez vous authentifier\r\n");
+    ssize_t resultat = send(descSockCOM, buffer, strlen(buffer), 0);
+    if (resultat == -1) {
+        perror("Erreur d'envoi");
+    } else {
+        printf("Succès : send a retourné %zd\n", resultat);
+    }
+
+    strcpy(buffer, "530 - Veuillez vous authentifier\n");
     write(descSockCOM, buffer, strlen(buffer));
 
+    strcpy(buffer, "331 - Veuillez mettre le mot de passe\r\n");
+    write(descSockCOM, buffer, strlen(buffer));
+    */
     /*******
      * 
      * A vous de continuer !
