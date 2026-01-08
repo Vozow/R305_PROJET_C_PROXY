@@ -82,7 +82,7 @@ int main()
     }
     printf("Lancement du Proxy...\n");
     printf("  - L'adresse d'ecoute est: %s\n", serverAddr);
-    printf("  - Le port d'ecoute est: %s\n\n", serverPort);
+    printf("  - Le port d'ecoute est: %s\n", serverPort);
 
     // Definition de la taille du tampon contenant les demandes de connexion
     ecode = listen(descSockRDV, LISTENLEN);
@@ -95,14 +95,35 @@ int main()
     len = sizeof(struct sockaddr_storage);
     // Attente connexion du client
     // Lorsque demande de connexion, creation d'une socket de communication avec le client
-    descSockCOM = accept(descSockRDV, (struct sockaddr *)&from, &len);
-    if (descSockCOM == -1)
+    int pid = 1;
+    while (pid != 0)
     {
-        perror("Erreur accept\n");
-        exit(6);
+        pid = getpid();
+        descSockCOM = accept(descSockRDV, (struct sockaddr *)&from, &len);
+        if (descSockCOM == -1)
+        {
+            perror("Erreur accept\n");
+            exit(6);
+        }
+        printf("\nProcessus Initial - %d | Connexion au proxy, création du fils...\n", pid);
+        pid = fork();
+        if (pid == -1)
+        {
+            perror("Erreur fork\n");
+            exit(7);
+        }
+        if( pid == 0)
+        {
+            close(descSockRDV);
+        }
+        if (pid != 0)
+        {
+            close(descSockCOM);
+        }
     }
 
     // Echange de données avec le client connecté
+    pid_t forkId = getpid();
 
     /*
      *
@@ -112,8 +133,8 @@ int main()
     // Connection au serveur FTP
     strcpy(buffer, "220 - Bienvenue sur le Proxy, veuillez vous authentifier\r\n");
     write(descSockCOM, buffer, strlen(buffer));
-    printf("Phase de connexion au proxy\n");
-    printf("  - Connection au proxy (220)\n\n");
+    printf("%d | Phase de connexion au proxy\n", forkId);
+    printf("%d |  - Connection au proxy (220)\n\n", forkId);
     memset(buffer, 0, MAXBUFFERLEN);
 
     /*
@@ -122,7 +143,7 @@ int main()
      *
      */
     // Boucle de connexion
-    printf("Phase de connexion au serveur\n");
+    printf("%d | Phase de connexion au serveur\n", forkId);
     char username[MAXBUFFERLEN] = "";
     char server[MAXBUFFERLEN] = "";
     char *result;
@@ -141,7 +162,7 @@ int main()
             }
             if (ecode == 0)
             {
-                printf("  Connexion au Client fermé ⭕\n");
+                printf("%d | Connexion au Client fermé ⭕\n", forkId);
                 close(descSockCOM);
                 close(descSockRDV);
                 exit(0);
@@ -150,9 +171,9 @@ int main()
             if (ecode > 0)
             {
                 // Logs
-                printf("  - Lecture réponse du client :\n");
+                printf("%d |  - Lecture réponse du client :\n", forkId);
                 buffer[strcspn(buffer, "\r\n")] = '\0';
-                printf("    ➥  %s\n", buffer);
+                printf("%d |    ➥  %s\n", forkId, buffer);
                 /*
                  * Gestion des commandes FTP lors de la connexion
                  */
@@ -162,7 +183,7 @@ int main()
                     memset(buffer, 0, MAXBUFFERLEN);
                     strcpy(buffer, "500 SSL et TLS non disponible.\r\n");
                     write(descSockCOM, buffer, strlen(buffer));
-                    printf("      ➥  Réponse - SSL et TLS non disponible (500)\n");
+                    printf("%d |      ➥  Réponse - SSL et TLS non disponible (500)\n", forkId);
                 }
                 // USER :
                 else if (strncmp(buffer, "USER", 4) == 0)
@@ -181,13 +202,13 @@ int main()
                         write(descSockCOM, buffer, strlen(buffer));
                         username[0] = '\0';
                         server[0] = '\0';
-                        printf("      ➥  Format incorrect (530)\n");
+                        printf("%d |      ➥  Format incorrect (530)\n", forkId);
                     }
                     else
                     {
-                        printf("      ➥  Format Correct, information :\n");
-                        printf("        ➥  Username : %s\n", username);
-                        printf("        ➥  Server : %s\n", server);
+                        printf("%d |      ➥  Format Correct, information :\n", forkId);
+                        printf("%d |        ➥  Username : %s\n", forkId, username);
+                        printf("%d |        ➥  Server : %s\n", forkId, server);
                     }
                 }
                 // QUIT :
@@ -196,9 +217,8 @@ int main()
                     memset(buffer, 0, MAXBUFFERLEN);
                     strcpy(buffer, "221 Au revoir.\r\n");
                     write(descSockCOM, buffer, strlen(buffer));
-                    printf("        ➥  Deconnexion du proxy (221)\n");
+                    printf("%d |        ➥  Deconnexion du proxy (221)\n", forkId);
                     close(descSockCOM);
-                    close(descSockRDV);
                     exit(0);
                 }
                 // SYST :
@@ -206,7 +226,7 @@ int main()
                 {
                     memset(buffer, 0, MAXBUFFERLEN);
                     strcpy(buffer, "530 Utilisez \"user\" pour vous authentifier (format user@host).\r\n");
-                    printf("      ➥  Information du proxy (530)\n");
+                    printf("%d |      ➥  Information du proxy (530)\n", forkId);
                     write(descSockCOM, buffer, strlen(buffer));
                 }
                 // AUTRES COMMANDES :
@@ -215,14 +235,14 @@ int main()
                     memset(buffer, 0, MAXBUFFERLEN);
                     strcpy(buffer, "502 Commande non disponible.\r\n");
                     write(descSockCOM, buffer, strlen(buffer));
-                    printf("    ➥  Commande indisponible (502)\n");
+                    printf("%d |    ➥  Commande indisponible (502)\n", forkId);
                 }
             }
         }
 
         // Connexion au serveur FTP
         connect2Server(server, FTPPORT, &descSockSERVER);
-        printf("  - Tentative de connexion au serveur FTP :\n");
+        printf("%d |  - Tentative de connexion au serveur FTP :\n", forkId);
         // Lecture de la réponse du serveur FTP
         memset(buffer, 0, MAXBUFFERLEN);
         ecode = recv(descSockSERVER, buffer, MAXBUFFERLEN, 0);
@@ -232,23 +252,23 @@ int main()
             memset(buffer, 0, MAXBUFFERLEN);
             strcpy(buffer, "530 Erreur de connexion au serveur FTP. Utilisez \"user\" pour vous authentifier.\r\n");
             send(descSockCOM, buffer, strlen(buffer), 0);
-            printf("      ➥  Connexion au serveur FTP non établi (adresse incorrecte ou serveur indisponible) ⚠️\n");
+            printf("%d |      ➥  Connexion au serveur FTP non établi (adresse incorrecte ou serveur indisponible) ⚠️\n", forkId);
             username[0] = '\0';
             server[0] = '\0';
         }
         if (ecode == 0)
         {
-            printf("  Connexion au Serveur fermé ⭕\n");
+            printf("%d |  Connexion au Serveur fermé ⭕\n", forkId);
         }
         // Cas normal
         if (ecode > 0)
         {
             buffer[strcspn(buffer, "\r\n")] = '\0';
-            printf("    ➥  %s\n", buffer);
+            printf("%d |    ➥  %s\n", forkId, buffer);
             if (strncmp(buffer, "220", 3) == 0)
             {
                 // Informer l'utilisateur de la connexion réussie
-                printf("  - Connexion Validé... \n");
+                printf("%d |  - Connexion Validé... \n", forkId);
                 // Login côté serveur FTP
                 strcpy(buffer, "USER ");
                 strcat(buffer, username);
@@ -264,18 +284,18 @@ int main()
                 }
                 if (ecode == 0)
                 {
-                    printf("  Connexion au Serveur fermé ⭕\n");
+                    printf("%d |  Connexion au Serveur fermé ⭕\n", forkId);
                 }
                 // Cas normal
                 if (ecode > 0)
                 {
-                    printf("  - Réponse du serveur FTP :\n");
+                    printf("%d |  - Réponse du serveur FTP :\n", forkId);
                     buffer[strcspn(buffer, "\r\n")] = '\0';
-                    printf("    ➥  %s\n", buffer);
+                    printf("%d |    ➥  %s\n", forkId, buffer);
                     // Username correct
                     if (strncmp(buffer, "331", 3) == 0)
                     {
-                        printf("      ➥  Identifiant valide\n");
+                        printf("%d |      ➥  Identifiant valide\n", forkId);
                         connected = true;
                     }
                     // Username incorrect
@@ -284,7 +304,7 @@ int main()
                         memset(buffer, 0, MAXBUFFERLEN);
                         strcpy(buffer, "Connecté au serveur, Identifiant invalide !\r\n");
                         write(descSockCOM, buffer, strlen(buffer));
-                        printf("      ➥  Identifiant invalide ⚠️\n");
+                        printf("%d |      ➥  Identifiant invalide ⚠️\n", forkId);
                         username[0] = '\0';
                         server[0] = '\0';
                     }
@@ -303,8 +323,8 @@ int main()
     memset(buffer, 0, MAXBUFFERLEN);
     strcpy(buffer, "331 Connecté au serveur, Identifiant valide, veuillez saisir votre mot de passe.\r\n");
     write(descSockCOM, buffer, strlen(buffer));
-    printf("\nPhase d'authentification au proxy\n");
-    printf("  - Demande de mot de passe (331)\n\n");
+    printf("\n%d | Phase d'authentification au proxy\n", forkId);
+    printf("%d |  - Demande de mot de passe (331)\n\n", forkId);
     bool authentified = false;
     char password[MAXBUFFERLEN] = "";
     while (authentified == false)
@@ -319,24 +339,23 @@ int main()
         }
         if (ecode == 0)
         {
-            printf("  Connexion au Client fermé ⭕\n");
+            printf("%d |  Connexion au Client fermé ⭕\n", forkId);
             close(descSockCOM);
-            close(descSockRDV);
             exit(0);
         }
         // Cas normal
         if (ecode > 0)
         {
             // Logs
-            printf("  - Lecture réponse du client :\n");
+            printf("%d |  - Lecture réponse du client :\n", forkId);
             buffer[strcspn(buffer, "\r\n")] = '\0';
-            printf("    ➥  %s\n", buffer);
+            printf("%d |    ➥  %s\n", forkId, buffer);
             // PASS :
             if (strncmp(buffer, "PASS", 4) == 0)
             {
                 // Recuperation du mot de passe
                 strcpy(password, buffer + 5);
-                printf("      ➥  Mot de passe : %s\n", password);
+                printf("%d |      ➥  Mot de passe : %s\n", forkId, password);
                 // Envoi du mot de passe au serveur FTP
                 strcat(buffer, "\r\n");
                 send(descSockSERVER, buffer, strlen(buffer), 0);
@@ -350,21 +369,21 @@ int main()
                 }
                 if (ecode == 0)
                 {
-                    printf("  Connexion au Serveur fermé ⭕\n");
+                    printf("%d |  Connexion au Serveur fermé ⭕\n", forkId);
                 }
                 // Cas normal
                 if (ecode > 0)
                 {
-                    printf("  - Réponse du serveur FTP :\n");
+                    printf("%d |  - Réponse du serveur FTP :\n", forkId);
                     buffer[strcspn(buffer, "\r\n")] = '\0';
-                    printf("    ➥  %s\n", buffer);
+                    printf("%d |    ➥  %s\n", forkId, buffer);
                     if (strncmp(buffer, "230", 3) == 0)
                     {
                         // Informer le client de l'authentification réussie
                         memset(buffer, 0, MAXBUFFERLEN);
                         strcpy(buffer, "230 Authentification réussie.\r\n");
                         write(descSockCOM, buffer, strlen(buffer));
-                        printf("      ➥  Authentification réussie (230)\n");
+                        printf("%d |      ➥  Authentification réussie (230)\n", forkId);
                         authentified = true;
                     }
                     else
@@ -373,7 +392,7 @@ int main()
                         memset(buffer, 0, MAXBUFFERLEN);
                         strcpy(buffer, "530 Authentification échouée. Veuillez réessayer avec \"PASS\".\r\n");
                         write(descSockCOM, buffer, strlen(buffer));
-                        printf("      ➥  Authentification échouée (530)\n");
+                        printf("%d |      ➥  Authentification échouée (530)\n", forkId);
                     }
                 }
             }
@@ -383,9 +402,8 @@ int main()
     memset(buffer, 0, MAXBUFFERLEN);
     strcpy(buffer, "230 Connecté au serveur, Authentification réussie valide !\r\n");
     write(descSockCOM, buffer, strlen(buffer));
-    printf("\nConnexion établie (Client <---> Proxy <---> Serveur FTP) ✅\n\n");
+    printf("\n%d | Connexion établie (Client <---> Proxy <---> Serveur FTP) ✅\n\n", forkId);
 
     // Fermeture de la connexion
     close(descSockCOM);
-    close(descSockRDV);
 }
