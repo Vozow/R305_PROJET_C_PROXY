@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include "./simpleSocketAPI.h"
+#include <signal.h>
 
 #define SERVADDR "127.0.0.1" // Définition de l'adresse IP d'écoute
 #define SERVPORT "0"         // Définition du port d'écoute, si 0 port choisi dynamiquement
@@ -29,6 +30,12 @@ int read_com_client(int descSockCOM, int descSockCOMSERVER, char *buffer, bool c
 void send_com_server(int descSockCOMSERVER, const char *message);
 int recv_com_server(int descSockCOMSERVER, int descSockCOM, char *buffer);
 
+// Fonction de fermeture du proxy 
+void fermetureProxy(int signal);
+//Variable declaré ici pour pouvoir fermer correctement
+int descSockRDV;                // Descripteur de socket de rendez-vous
+int descSockCOM;                // Descripteur de socket de communication
+
 int main()
 {
     /*
@@ -39,13 +46,12 @@ int main()
     int ecode;                      // Code retour des fonctions
     char serverAddr[MAXHOSTLEN];    // Adresse du serveur
     char serverPort[MAXPORTLEN];    // Port du server
-    int descSockRDV;                // Descripteur de socket de rendez-vous
-    int descSockCOM;                // Descripteur de socket de communication
     struct addrinfo hints;          // Contrôle la fonction getaddrinfo
     struct addrinfo *res;           // Contient le résultat de la fonction getaddrinfo
     struct sockaddr_storage myinfo; // Informations sur la connexion de RDV
     struct sockaddr_storage from;   // Informations sur le client connecté
     socklen_t len;                  // Variable utilisée pour stocker les longueurs des structures de socket
+    signal(SIGINT, fermetureProxy);
 
     /*
      *
@@ -123,17 +129,18 @@ int main()
     // Boucle principal du proxy
     while (true)
     {
-        descSockCOM = accept(descSockRDV, (struct sockaddr *)&from, &len);
+        descSockCOM = accept(descSockRDV, (struct sockaddr *)&from, &len); // Attente de connection
         printf("\nProcessus Initial - %d | Connexion au proxy, création du fils...\n", getpid());
         // Création d'un processus fils pour gérer le client
-        int forkCode = fork();
+        int forkCode = fork(); // Création du fils
         if (forkCode == 0)
         {
             printf("\n%d | Connexion au proxy, création du fils...\n", getpid());
             // Gestion du client dans la fonction
-            gestionClient(descSockCOM);
+            gestionClient(descSockCOM); // Fonction pour gérer le client
             // Fin de la gestion client et du processus fils
             close(descSockRDV);
+            close(descSockCOM);
             exit(0);
         }
         if (forkCode > 0)
@@ -170,20 +177,16 @@ void gestionClient(int descSockCOM)
      */
     gestionConnexionClient(descSockCOM, forkId);                                                   // Gestion lors de la connexion au proxy
     ecode = gestionConnexionServeurClient(descSockCOM, &descSockCOMSERVER, buffer, ecode, forkId); // Gestion de la connexion entre le client et le serveur FTP
-    if (ecode == 0)                                                                        // Client deconnecté pendant la connexion au serveur
+    if (ecode == 0)                                                                                // Client deconnecté pendant la connexion au serveur
     {
-        return;
+        return; // Return pour ne pas faire le reste du code et fermer les socket et kill le fils
     }
     ecode = gestionAuthentificationClient(descSockCOM, descSockCOMSERVER, buffer, ecode, forkId); // Gestion de l'authentification entre le client et le serveur FTP
-    if (ecode == 0)                                                                       // Client ou serveur déconnecté pendant l'authentification
+    if (ecode == 0)                                                                               // Client ou serveur déconnecté pendant l'authentification
     {
-        return;
+        return; // Return pour ne pas faire le reste du code et fermer les socket et kill le fils
     }
     ecode = gestionCommunicationClientServeur(descSockCOM, descSockCOMSERVER, buffer, ecode, forkId); // Gestion de la communication entre le client et le serveur FTP
-    if (ecode == 0)                                                                           // Client ou serveur déconnecté pendant la communication
-    {
-        return;
-    }
 }
 
 /*
@@ -203,16 +206,16 @@ void gestionConnexionClient(int descSockCOM, pid_t forkId)
  *   AUTHENTIFICATION AU SERVEUR FTP
  *
  */
+// Retourne 0 si la connexion est interrompu, sinon > 1
 int gestionConnexionServeurClient(int descSockCOM, int *descSockCOMSERVER, char buffer[], int ecode, int forkId)
 {
     printf("%d | Phase de connexion au serveur\n", forkId);
-    char username[MAXBUFFERLEN] = "";
-    char server[MAXBUFFERLEN] = "";
-    char *pointer; // temp
-    bool connected = false;
-    while (connected == false)
+    char username[MAXBUFFERLEN] = ""; // Variable pour l'username
+    char server[MAXBUFFERLEN] = "";   // Variable pour l'adresse du serveur
+    bool connected = false;           // Boolean si l'utilisateur n'est pas connecté (connecté & username valide)
+    while (connected == false)        // Boucle tant que l'utilisateur n'est pas connecté
     {
-        while (username[0] == '\0' || server[0] == '\0')
+        while (username[0] == '\0' || server[0] == '\0') // Boucle tant que l'utilisateur et le serveur sont vide
         {
             // Lecture de la réponse du client
             ecode = read_com_client(descSockCOM, *descSockCOMSERVER, buffer, false);
@@ -233,22 +236,15 @@ int gestionConnexionServeurClient(int descSockCOM, int *descSockCOMSERVER, char 
                 // USER :
                 else if (strncmp(buffer, "USER", 4) == 0)
                 {
-                    buffer[strcspn(buffer, "\r\n")] = '\0';
-                    pointer = strchr(buffer, '@');
-                    if (pointer != NULL)
-                    {
-                        *pointer = '\0';
-                        strcpy(username, buffer + 5);
-                        strcpy(server, pointer + 1);
-                    }
-                    if (pointer == NULL || username[0] == '\0' || server[0] == '\0')
+                    sscanf(buffer + 5, "%49[^@]@%s", username, server); // Expression reguliere qui scan le buffer après 5 caractere (pour passer "USER ")
+                    if (username[0] == '\0' || server[0] == '\0')       // Si username ou server vide
                     {
                         printf("%d |      ➥  Format incorrect (530)\n", forkId);
                         write_com_client(descSockCOM, "530 Format incorrect. Utilisez user@host.\r\n");
                         username[0] = '\0';
                         server[0] = '\0';
                     }
-                    else
+                    else // logs
                     {
                         printf("%d |      ➥  Format Correct, information :\n", forkId);
                         printf("%d |        ➥  Username : %s\n", forkId, username);
@@ -260,7 +256,6 @@ int gestionConnexionServeurClient(int descSockCOM, int *descSockCOMSERVER, char 
                 {
                     write_com_client(descSockCOM, "221 Au revoir.\r\n");
                     printf("%d |        ➥  Deconnexion du proxy ⭕ (221)\n", forkId);
-                    close(descSockCOM);
                     return 0;
                 }
                 // SYST :
@@ -279,17 +274,17 @@ int gestionConnexionServeurClient(int descSockCOM, int *descSockCOMSERVER, char 
          * Connexion au serveur FTP
          */
         printf("%d |  - Tentative de connexion au serveur FTP :\n", forkId);
-        connect2Server(server, FTPPORT, descSockCOMSERVER);
+        connect2Server(server, FTPPORT, descSockCOMSERVER); // Connection venant de la librairie simpleSocketAPI
         // Lecture de la réponse du serveur FTP
         ecode = recv_com_server(*descSockCOMSERVER, descSockCOM, buffer);
-        if (ecode == -1)
+        if (ecode == -1) // Si la connexion au serveur est invalide
         {
             write_com_client(descSockCOM, "530 Erreur de connexion au serveur FTP. Utilisez \"user\" pour vous authentifier.\r\n");
             printf("%d |      ➥  Connexion au serveur FTP non établi (adresse incorrecte ou serveur indisponible) ⚠️\n", forkId);
             username[0] = '\0';
             server[0] = '\0';
         }
-        if (ecode > 0)
+        if (ecode > 0) // Si on est bien connecté au serveur
         {
             if (strncmp(buffer, "220", 3) == 0)
             {
@@ -320,10 +315,15 @@ int gestionConnexionServeurClient(int descSockCOM, int *descSockCOMSERVER, char 
                     {
                         write_com_client(descSockCOM, "530 Connecté au serveur, Identifiant invalide !\r\n");
                         printf("%d |      ➥  Identifiant invalide ⚠️\n", forkId);
-                        username[0] = '\0';
-                        server[0] = '\0';
+                        username[0] = '\0'; // On vide le server
+                        server[0] = '\0';   // On vide l'username
+                                            // pour rerentrer dans le boucle précédante
                     }
                 }
+            }
+            else
+            {
+                printf("%d | Erreur de réponse du serveur FTP ⚠️\n", forkId);
             }
         }
     }
@@ -331,18 +331,18 @@ int gestionConnexionServeurClient(int descSockCOM, int *descSockCOMSERVER, char 
     return 1;
 }
 
-
 /*
  *
  *   AUTHENTIFICATION DU CLIENT AU SERVEUR
  *
  */
+// Retourne 0 si la connexion est interrompu, sinon > 1
 int gestionAuthentificationClient(int descSockCOM, int descSockCOMSERVER, char buffer[], int ecode, int forkId)
 {
     printf("\n%d | Phase d'authentification au proxy\n", forkId);
     printf("%d |  - Demande de mot de passe (331)\n", forkId);
-    bool authentified = false;
-    char password[MAXBUFFERLEN] = "";
+    bool authentified = false;        // Si on est authentifié (mot de passe valide)
+    char password[MAXBUFFERLEN] = ""; // Variable mot de passe pour les logs
     while (authentified == false)
     {
         // Lecture de la réponse du client
@@ -357,8 +357,8 @@ int gestionAuthentificationClient(int descSockCOM, int descSockCOMSERVER, char b
             if (strncmp(buffer, "PASS", 4) == 0)
             {
                 // Recuperation du mot de passe
-                strcpy(password, buffer + 5);
-                password[strcspn(password, "\r\n")] = '\0';
+                strcpy(password, buffer + 5);               // Copy le buffer a partir du 5eme caractere
+                password[strcspn(password, "\r\n")] = '\0'; // Enleve les caracteres spéciaux \r\n
                 printf("%d |      ➥  Mot de passe : %s\n", forkId, password);
                 // Envoi du mot de passe au serveur FTP
                 send(descSockCOMSERVER, buffer, strlen(buffer), 0);
@@ -370,7 +370,7 @@ int gestionAuthentificationClient(int descSockCOM, int descSockCOMSERVER, char b
                 }
                 if (ecode > 0)
                 {
-                    if (strncmp(buffer, "230", 3) == 0)
+                    if (strncmp(buffer, "230", 3) == 0) // Connexion réussie
                     {
                         // Informer le client de l'authentification réussie
                         write_com_client(descSockCOM, "230 Connecté au serveur, Authentification réussie valide !\r\n");
@@ -378,7 +378,7 @@ int gestionAuthentificationClient(int descSockCOM, int descSockCOMSERVER, char b
                         printf("%d | Connexion établie (Client <---> Proxy <---> Serveur FTP) ✅\n\n", forkId);
                         authentified = true;
                     }
-                    else
+                    else // Connexion non réussis -> mot de passe invalide
                     {
                         // Nouvelle demande de mot de passe
                         write_com_client(descSockCOM, "530 Authentification échouée. Veuillez réessayer avec \"PASS\".\r\n");
@@ -391,15 +391,16 @@ int gestionAuthentificationClient(int descSockCOM, int descSockCOMSERVER, char b
     return 1;
 }
 
-
 /*
  *
  *   COMMUNICATION DU CLIENT ET DU SERVEUR
  *
  */
+// Retourne 0 si la connexion est interrompu, sinon > 1
 int gestionCommunicationClientServeur(int descSockCOM, int descSockCOMSERVER, char buffer[], int ecode, int forkId)
 {
     printf("\n%d | Phase de communication client-serveur\n", forkId);
+    // Boucle de communication
     while (true)
     {
         ecode = read_com_client(descSockCOM, descSockCOMSERVER, buffer, true);
@@ -409,16 +410,17 @@ int gestionCommunicationClientServeur(int descSockCOM, int descSockCOMSERVER, ch
         }
         if (ecode > 0)
         {
-            // COMMANDE EN MODE ACTIF
+            // COMMANDE EN MODE ACTIF -> Echange de données
             if (strncmp(buffer, "PORT", 4) == 0)
             {
+                // Gestion d'echange de donnée
                 ecode = gestionEchangeDonnees(descSockCOM, descSockCOMSERVER, buffer, ecode, forkId);
-                if( ecode == 0 )
+                if (ecode == 0)
                 {
                     return 0;
                 }
             }
-            // COMMANDE EN MODE PASSIF
+            // COMMANDE EN MODE PASSIF -> Non géré
             else if (strncmp(buffer, "PASV", 4) == 0)
             {
                 write_com_client(descSockCOM, "500 Mode passif non supporté.\r\n");
@@ -451,7 +453,6 @@ int gestionCommunicationClientServeur(int descSockCOM, int descSockCOMSERVER, ch
     return 1;
 }
 
-
 /*
  *
  *   ECHANGE DE DONNEES ENTRE LE CLIENT ET LE SERVEUR
@@ -469,17 +470,17 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
     char serverPort[6] = "";
     // Obtention de l'adresse et port du client
     printf("\n%d | Echange de Données\n", forkId);
-    buffer[strcspn(buffer, "\r\n")] = '\0';
-    sscanf(buffer + 5, "%d,%d,%d,%d,%d,%d", &clientAnswer[0], &clientAnswer[1], &clientAnswer[2], &clientAnswer[3], &clientAnswer[4], &clientAnswer[5]);
-    sprintf(clientAdress, "%d.%d.%d.%d", clientAnswer[0], clientAnswer[1], clientAnswer[2], clientAnswer[3]);
-    sprintf(clientPort, "%d", clientAnswer[4] * 256 + clientAnswer[5]);
+    buffer[strcspn(buffer, "\r\n")] = '\0';                                                                                                              // Remplace les \r\n par une fin de chaine
+    sscanf(buffer + 5, "%d,%d,%d,%d,%d,%d", &clientAnswer[0], &clientAnswer[1], &clientAnswer[2], &clientAnswer[3], &clientAnswer[4], &clientAnswer[5]); // Extrait les nombre du servuer
+    sprintf(clientAdress, "%d.%d.%d.%d", clientAnswer[0], clientAnswer[1], clientAnswer[2], clientAnswer[3]);                                            // Print dans un char[] l'adresse du serveur
+    sprintf(clientPort, "%d", clientAnswer[4] * 256 + clientAnswer[5]);                                                                                  // Print dans un char[] le port du serveur (avec la formule du port)
     printf("%d |        ➥  Adresse : %s\n", forkId, clientAdress);
     printf("%d |        ➥  Port : %s\n", forkId, clientPort);
     // Envoi de la commande PASV au serveur FTP
     send_com_server(descSockCOMSERVER, "PASV\r\n");
     printf("%d |      ➥  Envoi de la commande PASV au serveur FTP\n", forkId);
     // Lecture de la réponse du serveur FTP
-    ecode = recv_com_server(descSockCOMSERVER, descSockCOM, buffer);
+    ecode = recv_com_server(descSockCOMSERVER, descSockCOM, buffer); // Recupere la réponse du serveur
     if (ecode == 0)
     {
         return 0;
@@ -492,10 +493,10 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
             write_com_client(descSockCOM, "500 Erreur, passage en mode passif (Proxy --> Serveur) interrompu\r\n");
             printf("%d |      ➥  Erreur passage en mode passif (Proxy --> Serveur) interrompu (500)\n", forkId);
         }
-        else
+        else // Dans le cas normal
         {
-            char *start = strchr(buffer, '(');
-            if (start == NULL)
+            char *pointer = strchr(buffer, '('); // Pointeur qui pointe sur la premiere parenthése (format FTP)
+            if (pointer == NULL)
             {
                 write_com_client(descSockCOM, "500 Erreur, format du serveur non valide\r\n");
                 printf("%d | ERREUR: Format 227 invalide (pas de parenthèse)\n", forkId);
@@ -504,8 +505,8 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
             {
                 // Extraction de l'adresse et du port du serveur FTP
                 int serverAnswer[6];
-                buffer[strcspn(buffer, "\r\n")] = '\0';
-                sscanf(start, "(%d,%d,%d,%d,%d,%d).", &serverAnswer[0], &serverAnswer[1], &serverAnswer[2], &serverAnswer[3], &serverAnswer[4], &serverAnswer[5]);
+                buffer[strcspn(buffer, "\r\n")] = '\0';                                                                                                            // Enleve les caracteres spéciaux \r\n
+                sscanf(pointer, "(%d,%d,%d,%d,%d,%d).", &serverAnswer[0], &serverAnswer[1], &serverAnswer[2], &serverAnswer[3], &serverAnswer[4], &serverAnswer[5]); // Comme pour le client
                 sprintf(serverAdress, "%d.%d.%d.%d", serverAnswer[0], serverAnswer[1], serverAnswer[2], serverAnswer[3]);
                 sprintf(serverPort, "%d", serverAnswer[4] * 256 + serverAnswer[5]);
                 printf("%d |        ➥  Adresse : %s\n", forkId, serverAdress);
@@ -513,12 +514,12 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
             }
         }
     }
-    if (clientAdress[0] != '\0' && clientPort != 0 && serverAdress[0] != '\0' && serverPort != 0)
+    if (clientAdress[0] != '\0' && clientPort != 0 && serverAdress[0] != '\0' && serverPort != 0) // Verification si les champs sont bon
     {
-        // Connexion au serveur
+        // Connexion au serveur de données (Serveur)
         connect2Server(serverAdress, serverPort, &descSockDATASERVER);
         printf("%d |      ➥  Connexion au serveur (Serveur) établie\n", forkId);
-        // Connexion au Client
+        // Connexion au serveur de données (Client)
         write_com_client(descSockCOM, "200 Connexion au mode actif établie.\r\n");
         connect2Server(clientAdress, clientPort, &descSockDATACLIENT);
         printf("%d |      ➥  Connexion au serveur (Client) établie\n", forkId);
@@ -526,8 +527,8 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
         ecode = read_com_client(descSockCOM, descSockCOMSERVER, buffer, true);
         if (ecode == 0)
         {
-            close(descSockDATACLIENT);
-            close(descSockDATASERVER);
+            close(descSockDATACLIENT); // En cas d'erreur si le serveur est fermer
+            close(descSockDATASERVER); // En cas d'erreur si le serveur est fermer
             return 0;
         }
         if (ecode > 0)
@@ -541,27 +542,28 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
                 ecode = recv_com_server(descSockCOMSERVER, descSockCOM, buffer);
                 if (ecode == 0)
                 {
-                    close(descSockDATACLIENT);
-                    close(descSockDATASERVER);
+                    close(descSockDATACLIENT); // En cas d'erreur si le serveur est fermer
+                    close(descSockDATASERVER); // En cas d'erreur si le serveur est fermer
                     return 0;
                 }
                 if (ecode > 0)
                 {
                     write_com_client(descSockCOM, buffer);
                     printf("%d |      ➥  Envoi de la réponse - Serveur --> Client\n", forkId);
-                    if (strncmp(buffer, "226", 3) == 0)
+                    if (strncmp(buffer, "226", 3) == 0) // 226 -> Transfert terminé
                     {
                         transfer = true;
                         printf("%d | Transfer terminé.", forkId);
                     }
-                    else if (strncmp(buffer, "150", 3) == 0)
+                    else if (strncmp(buffer, "150", 3) == 0) // 150 -> Début de transfer
                     {
-                        int sizeBuf;
-                        while ((sizeBuf = recv(descSockDATASERVER, buffer, MAXBUFFERLEN, 0)) > 0)
-                        {
-                            send(descSockDATACLIENT, buffer, sizeBuf, 0);
-                        }
                         printf("%d |      ➥  Envoi des données - Serveur --> Client\n", forkId);
+                        int lenBuffer;
+                        while ((lenBuffer = recv(descSockDATASERVER, buffer, MAXBUFFERLEN, 0)) > 0) // Si le buffer n'est pas vide (recv renvoie la len du buffer)
+                        {
+                            send(descSockDATACLIENT, buffer, lenBuffer, 0); // Envoie les données
+                        }
+                        // Fin du transfert
                         close(descSockDATACLIENT);
                         close(descSockDATASERVER);
                         printf("%d |      ➥  Fermeture des connexions de données\n", forkId);
@@ -574,10 +576,12 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
             }
         }
     }
+    else
+    {
+        printf("%d | Erreur de format de Serveur ou Port", forkId);
+    }
     return 1;
 }
-
-
 
 // Ecriture d'un message au client
 void write_com_client(int descSockCOM, const char *message)
@@ -586,7 +590,7 @@ void write_com_client(int descSockCOM, const char *message)
     printf("%d |  ➥  Envoi au Client : %s", getpid(), message);
 }
 
-// Lecture d'une reponse du client
+// Lecture d'une reponse du client et renvoie l'ecode
 int read_com_client(int descSockCOM, int descSockCOMSERVER, char *buffer, bool connected)
 {
     memset(buffer, 0, MAXBUFFERLEN);
@@ -621,7 +625,7 @@ void send_com_server(int descSockCOMSERVER, const char *message)
     printf("%d |  ➥  Envoi au Serveur : %s", getpid(), message);
 }
 
-// Reception d'une reponse du serveur
+// Reception d'une reponse du serveur et renvoie l'ecode
 int recv_com_server(int descSockCOMSERVER, int descSockCOM, char *buffer)
 {
     memset(buffer, 0, MAXBUFFERLEN);
@@ -645,4 +649,13 @@ int recv_com_server(int descSockCOMSERVER, int descSockCOM, char *buffer)
         strcat(buffer, "\r\n");
     }
     return ecode;
+}
+
+
+// Fonction appeler lorsque le signal detecte un ctrl+c
+void fermetureProxy(int signal)
+{
+    close(descSockRDV);
+    kill(0, SIGTERM);
+    exit(0);
 }
