@@ -514,7 +514,7 @@ int gestionEchangeDonnees(int descSockCOM, int descSockCOMSERVER, char buffer[],
             }
         }
     }
-    if (clientAdress[0] != '\0' && clientPort != 0 && serverAdress[0] != '\0' && serverPort != 0) // Verification si les champs sont bon
+    if (clientAdress[0] != '\0' && clientPort != '\0' && serverAdress[0] != '\0' && serverPort != '\0') // Verification si les champs sont bon
     {
         // Connexion au serveur de données (Serveur)
         connect2Server(serverAdress, serverPort, &descSockDATASERVER);
